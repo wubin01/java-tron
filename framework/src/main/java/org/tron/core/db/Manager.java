@@ -931,6 +931,10 @@ public class Manager {
     return consensus.validBlock(block);
   }
 
+  long blockCnt = 0;
+  long txsCnt = 0;
+  long totalCost = 0;
+
   /**
    * save a block.
    */
@@ -1070,6 +1074,12 @@ public class Manager {
 
     MetricsUtil.meterMark(MetricsKey.BLOCKCHAIN_BLOCK_PROCESS_TIME,
         System.currentTimeMillis() - start);
+
+    blockCnt++;
+    txsCnt += block.getTransactions().size();
+    totalCost += System.currentTimeMillis() - start;
+    logger.info("### blockNum:{}, blockCnt:{}, txsCnt:{}, totalCost:{}, avg:{}/{}",
+            block.getNum(), blockCnt, txsCnt, totalCost, txsCnt/blockCnt, totalCost/blockCnt);
 
     logger.info("pushBlock block number:{}, cost/txs:{}/{}",
         block.getNum(),
