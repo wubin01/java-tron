@@ -381,7 +381,6 @@ public class Manager {
     chainBaseManager.setMerkleContainer(getMerkleContainer());
     chainBaseManager.setMortgageService(mortgageService);
     chainBaseManager.init();
-    TxCacheDB.getTxCacheDB().init(chainBaseManager);
     this.initGenesis();
     try {
       this.khaosDb.start(chainBaseManager.getBlockById(
@@ -1461,8 +1460,6 @@ public class Manager {
     updateRecentBlock(block);
     updateDynamicProperties(block);
     chainBaseManager.getBalanceTraceStore().resetCurrentBlockTrace();
-    TxCacheDB.getTxCacheDB().setSolidBlockNum(
-            chainBaseManager.getDynamicPropertiesStore().getLatestSolidifiedBlockNum());
   }
 
   private void payReward(BlockCapsule block) {
