@@ -4,37 +4,64 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
+import com.google.common.hash.BloomFilter;
+import com.google.common.hash.Funnels;
 import com.google.common.primitives.Longs;
+
+import java.nio.charset.Charset;
 import java.nio.file.Paths;
+import java.sql.Struct;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.WeakHashMap;
+
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.codec.binary.Hex;
 import org.iq80.leveldb.WriteOptions;
 import org.tron.common.parameter.CommonParameter;
 import org.tron.common.storage.leveldb.LevelDbDataSourceImpl;
 import org.tron.common.storage.rocksdb.RocksDbDataSourceImpl;
 import org.tron.common.utils.StorageUtils;
+import org.tron.core.ChainBaseManager;
 import org.tron.core.db.common.iterator.DBIterator;
 
 @Slf4j(topic = "DB")
 public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
 
-  // > 65_536(= 2^16) blocks, that is the number of the reference block
-  private final int BLOCK_COUNT = 70_000;
+  @Getter
+  public static TxCacheDB txCacheDB;
 
-  private Map<Key, Long> db = new WeakHashMap<>();
-  private Multimap<Long, Key> blockNumMap = ArrayListMultimap.create();
+  private volatile int totalGetCount = 0;
+
+  private volatile int bloomFilterCount = 0;
+
+  private volatile int totalPutCount = 0;
+
   private String name;
 
-  // add a persistent storage, the store name is: trans-cache
-  // when fullnode startup, transactionCache initializes transactions from this store
+  private volatile long beginBlockNum;
+
+  private volatile long count = 0;
+
+  private volatile boolean syncFlag = false;
+
+  private volatile int threshold = 10_000_000;
+
+  BloomFilter filter = BloomFilter.create(Funnels.stringFunnel(Charset.defaultCharset()),
+          100_000_000);
+
+  BloomFilter filterBak = BloomFilter.create(Funnels.stringFunnel(Charset.defaultCharset()),
+          100_000_000);
+
   private DB<byte[], byte[]> persistentStore;
 
   public TxCacheDB(String name) {
+    txCacheDB = this;
+
     this.name = name;
 
     int dbVersion = CommonParameter.getInstance().getStorage().getDbVersion();
@@ -61,33 +88,43 @@ public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
     } else {
       throw new RuntimeException("db version is not supported.");
     }
-    // init cache from persistent store
-    init();
   }
 
-  /**
-   * this method only used for init, put all data in tran-cache into the two maps.
-   */
-  private void init() {
+  public void init(ChainBaseManager chainBaseManager) {
     DBIterator iterator = (DBIterator) persistentStore.iterator();
     while (iterator.hasNext()) {
       Entry<byte[], byte[]> entry = iterator.next();
       byte[] key = entry.getKey();
-      byte[] value = entry.getValue();
-      if (key == null || value == null) {
-        return;
-      }
-      Key k = Key.copyOf(key);
-      Long v = Longs.fromByteArray(value);
-      blockNumMap.put(v, k);
-      db.put(k, v);
+      filter.put(Hex.encodeHexString(key));
     }
+    beginBlockNum = chainBaseManager.getDynamicPropertiesStore().getLatestSolidifiedBlockNum();
+  }
+
+  public void setSolidBlockNum(long solidBlockNum) {
+    if (!syncFlag && count > threshold && solidBlockNum - beginBlockNum > 70000) {
+      beginBlockNum = solidBlockNum;
+      syncFlag = true;
+      logger.info("### sync flag change to true");
+    } else if (syncFlag && solidBlockNum - beginBlockNum > 70000) {
+      count = 0;
+      syncFlag = false;
+      filter = filterBak;
+      filterBak = BloomFilter.create(Funnels.stringFunnel(Charset.defaultCharset()),
+              100_000_000);
+      logger.info("### sync flag change to false");
+    }
+    logger.info("#### solidBlockNum:{}, totalPutCount:{}, totalGetCount:{}, bloomFilterCount:{}",
+            solidBlockNum, totalPutCount, totalGetCount, bloomFilterCount);
   }
 
   @Override
   public byte[] get(byte[] key) {
-    Long v = db.get(Key.of(key));
-    return v == null ? null : Longs.toByteArray(v);
+    totalGetCount++;
+    if (!filter.mightContain(Hex.encodeHexString(key))) {
+      bloomFilterCount++;
+      return null;
+    }
+    return persistentStore.get(key);
   }
 
   @Override
@@ -95,46 +132,29 @@ public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
     if (key == null || value == null) {
       return;
     }
-
-    Key k = Key.copyOf(key);
-    Long v = Longs.fromByteArray(value);
-    blockNumMap.put(v, k);
-    db.put(k, v);
-    // put the data into persistent storage
-    persistentStore.put(key, value);
-    removeEldest();
-  }
-
-  private void removeEldest() {
-    Set<Long> keys = blockNumMap.keySet();
-    if (keys.size() > BLOCK_COUNT) {
-      keys.stream()
-          .min(Long::compareTo)
-          .ifPresent(k -> {
-            Collection<Key> trxHashs = blockNumMap.get(k);
-            // remove transaction from persistentStore,
-            // if foreach is inefficient, change remove-foreach to remove-batch
-            trxHashs.forEach(key -> persistentStore.remove(key.getBytes()));
-            blockNumMap.removeAll(k);
-            logger.debug("******removeEldest block number:{}, block count:{}", k, keys.size());
-          });
+    totalPutCount++;
+    count++;
+    filter.put(Hex.encodeHexString(key));
+    if (syncFlag) {
+      filterBak.put(Hex.encodeHexString(key));
     }
+    persistentStore.put(key, value);
   }
 
   @Override
   public long size() {
-    return db.size();
+    return persistentStore.size();
   }
 
   @Override
   public boolean isEmpty() {
-    return db.isEmpty();
+    return persistentStore.isEmpty();
   }
 
   @Override
   public void remove(byte[] key) {
     if (key != null) {
-      db.remove(Key.of(key));
+      persistentStore.remove(key);
     }
   }
 
@@ -145,8 +165,7 @@ public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
 
   @Override
   public Iterator<Entry<byte[], byte[]>> iterator() {
-    return Iterators.transform(db.entrySet().iterator(),
-        e -> Maps.immutableEntry(e.getKey().getBytes(), Longs.toByteArray(e.getValue())));
+    return persistentStore.iterator();
   }
 
   @Override
@@ -157,16 +176,11 @@ public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
   @Override
   public void close() {
     reset();
-    db = null;
-    blockNumMap = null;
     persistentStore.close();
   }
 
   @Override
-  public void reset() {
-    db.clear();
-    blockNumMap.clear();
-  }
+  public void reset() {}
 
   @Override
   public TxCacheDB newInstance() {
