@@ -113,8 +113,12 @@ public class TxCacheDB implements DB<byte[], byte[]>, Flusher {
               100_000_000);
       logger.info("### sync flag change to false");
     }
-    logger.info("#### solidBlockNum:{}, totalPutCount:{}, totalGetCount:{}, bloomFilterCount:{}",
-            solidBlockNum, totalPutCount, totalGetCount, bloomFilterCount);
+
+    if (totalGetCount % 100 == 0) {
+      logger.info("#### solidBlockNum:{}, blockCount:{},  totalPutCount:{}, totalGetCount:{}, bloomFilterCount:{}",
+              solidBlockNum, solidBlockNum - beginBlockNum, totalPutCount, totalGetCount, bloomFilterCount);
+    }
+
   }
 
   @Override
