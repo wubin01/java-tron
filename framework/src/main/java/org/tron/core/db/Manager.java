@@ -950,7 +950,11 @@ public class Manager {
         total_txs_count += block.getTransactions().size();
         f_total_txs_count += block.getTransactions().size();
         applyBlock(newBlock);
-        tmpSession.commit();
+        if (f_total_block_count >= 500) {
+          tmpSession.commit();
+        }else {
+          tmpSession.merge();
+        }
         total_time += System.currentTimeMillis() - start;
         f_total_time += System.currentTimeMillis() - start;
         if (f_total_block_count >= 500) {
