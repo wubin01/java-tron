@@ -49,7 +49,7 @@ public class PeerConnection extends Channel {
   @Getter
   private HelloMessage helloMessageSend;
 
-  private int invCacheSize = 100_000;
+  private int invCacheSize = 5_000;
 
   @Setter
   @Getter
