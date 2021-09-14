@@ -958,7 +958,7 @@ public class Manager {
         total_time += System.currentTimeMillis() - start;
         f_total_time += System.currentTimeMillis() - start;
         if (f_total_block_count >= 500) {
-          logger.info("###### block num: {}, {}/{}/{}/{}, {}/{}, {}/{}}",
+          logger.info("### block num: {}, {}/{}/{}/{}, {}/{}, {}/{}}",
                   block.getNum(),
                   total_block_count,
                   total_txs_count,
